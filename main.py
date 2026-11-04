@@ -4,13 +4,12 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPri
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime, timedelta
-from aiohttp import web
 import asyncio
 import random
 import aiosqlite
 import os
 
-TOKEN = "9184774782:AAEGB-NlqoZpsFTJwDFaXxvEdrmZN5p4vIk"
+TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН"
 ADMIN_ID = 8121754585
 DB_PATH = "/app/data/bot.db"
 
@@ -751,4 +750,356 @@ async def on_paid(message: Message):
             users_data[user_id]["balance"] = round(users_data[user_id]["balance"] + amount_germ, 2)
             await db_update_balance(user_id, users_data[user_id]["balance"])
             await message.answer(
-                f"✅ Оплата получена! +{fmt(amount_germ)} Germ\n💰 Баланс: {fmt(users_data[user_id]['
+                f"✅ Оплата получена! +{fmt(amount_germ)} Germ\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+                reply_markup=get_main_menu(user_id)
+            )
+
+@dp.message(WithdrawState.waiting_username)
+async def withdraw_username(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    amount = withdraw_pending.get(user_id)
+    if not amount:
+        await state.clear()
+        await message.answer("❌ Заявка не найдена.")
+        return
+    username = message.text.strip()
+    users_data.setdefault(user_id, {"balance": 0.0})
+    if users_data[user_id]["balance"] < amount:
+        await state.clear()
+        await message.answer("❌ Недостаточно Germ.")
+        return
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] - amount, 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    withdraw_pending.pop(user_id, None)
+    await state.clear()
+    await message.answer(
+        f"✅ Заявка на вывод {amount} Germ отправлена.\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+        reply_markup=get_main_menu(user_id)
+    )
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            f"💸 Новая заявка на вывод\n"
+            f"Сумма: {amount} Germ\n"
+            f"ID: {user_id}\n"
+            f"Имя: {message.from_user.full_name}\n"
+            f"Юзернейм для отправки: {username}"
+        )
+    except Exception:
+        pass
+
+@dp.message(MinesState.waiting_bet)
+async def process_mines_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        bet = int(message.text)
+    except ValueError:
+        await message.answer("❌ Введи целое число от 1 до 1000.")
+        return
+    if bet < 1 or bet > 1000:
+        await message.answer("❌ Ставка должна быть от 1 до 1000.")
+        return
+    users_data.setdefault(user_id, {"balance": 0.0})
+    if users_data[user_id]["balance"] < bet:
+        await message.answer(f"❌ Недостаточно Germ. У тебя {fmt(users_data[user_id]['balance'])}.")
+        return
+    await state.clear()
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] - bet, 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    cells = list(range(25))
+    mines = set(random.sample(cells, 4))
+    game = {"bet": bet, "cells": ["mine" if i in mines else "safe" for i in range(25)], "mines": mines, "opened": set(), "finished": False}
+    mines_games[user_id] = game
+    await message.answer(f"💣 Ставка: {bet} Germ\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ", reply_markup=mines_kb(game))
+
+@dp.message(ChickenState.waiting_bet)
+async def process_chicken_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        bet = int(message.text)
+    except ValueError:
+        await message.answer("❌ Введи целое число от 1 до 1000.")
+        return
+    if bet < 1 or bet > 1000:
+        await message.answer("❌ Ставка должна быть от 1 до 1000.")
+        return
+    users_data.setdefault(user_id, {"balance": 0.0})
+    if users_data[user_id]["balance"] < bet:
+        await message.answer(f"❌ Недостаточно Germ. У тебя {fmt(users_data[user_id]['balance'])}.")
+        return
+    await state.clear()
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] - bet, 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    game = {"bet": bet, "step": 0, "finished": False}
+    chicken_games[user_id] = game
+    await message.answer(
+        f"🐔 Ставка: {bet} Germ\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ\nШаг 1/10. Жми «Шаг 1».",
+        reply_markup=chicken_kb(game)
+    )
+
+@dp.message(CrashState.waiting_bet)
+async def process_crash_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        bet = int(message.text)
+    except ValueError:
+        await message.answer("❌ Введи целое число от 1 до 1000.")
+        return
+    if bet < 1 or bet > 1000:
+        await message.answer("❌ Ставка должна быть от 1 до 1000.")
+        return
+    users_data.setdefault(user_id, {"balance": 0.0})
+    if users_data[user_id]["balance"] < bet:
+        await message.answer(f"❌ Недостаточно Germ. У тебя {fmt(users_data[user_id]['balance'])}.")
+        return
+    await state.clear()
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] - bet, 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    game = {"bet": bet, "mult": 1.0, "current_win": bet, "finished": False}
+    crash_games[user_id] = game
+    msg = await message.answer(
+        f"📈 Ставка: {bet} Germ\nМножитель: ×1.00\n💰 Забрать: {fmt(bet)} Germ",
+        reply_markup=crash_kb(game)
+    )
+    asyncio.create_task(crash_loop(user_id, msg))
+
+async def crash_loop(user_id, msg):
+    game = crash_games.get(user_id)
+    if not game:
+        return
+    while not game["finished"]:
+        await asyncio.sleep(1.0)
+        game["mult"] = round(game["mult"] + 0.2, 2)
+        game["current_win"] = round(game["bet"] * game["mult"], 2)
+        if game["mult"] >= 1.5 and random.random() < 0.25:
+            game["finished"] = True
+            await msg.edit_text(
+                f"💥 Краш на ×{game['mult']}!\nТы потерял {fmt(game['bet'])} Germ.\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+                reply_markup=end_menu
+            )
+            crash_games.pop(user_id, None)
+            return
+        if game["mult"] >= 7.0:
+            win = round(game["bet"] * game["mult"], 2)
+            users_data[user_id]["balance"] = round(users_data[user_id]["balance"] + win, 2)
+            await db_update_balance(user_id, users_data[user_id]["balance"])
+            game["finished"] = True
+            await msg.edit_text(
+                f"🚀 Максимум ×7! Выигрыш {fmt(win)} Germ.\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+                reply_markup=end_menu
+            )
+            crash_games.pop(user_id, None)
+            return
+        try:
+            await msg.edit_text(
+                f"📈 Ставка: {game['bet']} Germ\nМножитель: ×{game['mult']}\n💰 Забрать: {fmt(game['current_win'])} Germ",
+                reply_markup=crash_kb(game)
+            )
+        except Exception:
+            pass
+
+@dp.message(BlackjackState.waiting_bet)
+async def process_blackjack_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        bet = int(message.text)
+    except ValueError:
+        await message.answer("❌ Введи целое число от 1 до 1000.")
+        return
+    if bet < 1 or bet > 1000:
+        await message.answer("❌ Ставка должна быть от 1 до 1000.")
+        return
+    users_data.setdefault(user_id, {"balance": 0.0})
+    if users_data[user_id]["balance"] < bet:
+        await message.answer(f"❌ Недостаточно Germ. У тебя {fmt(users_data[user_id]['balance'])}.")
+        return
+    await state.clear()
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] - bet, 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    deck = new_deck()
+    player = [deck.pop(), deck.pop()]
+    dealer = [deck.pop(), deck.pop()]
+    game = {"bet": bet, "deck": deck, "player": player, "dealer": dealer, "finished": False}
+    blackjack_games[user_id] = game
+    pv = blackjack_value(player)
+    if pv == 21:
+        win = round(bet * 2.5, 2)
+        users_data[user_id]["balance"] = round(users_data[user_id]["balance"] + win, 2)
+        await db_update_balance(user_id, users_data[user_id]["balance"])
+        game["finished"] = True
+        await message.answer(
+            f"🃏 Блэкджек! {hand_text(player)} ({pv})\n💰 Выигрыш: {fmt(win)} Germ\n💳 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+            reply_markup=end_menu
+        )
+        blackjack_games.pop(user_id, None)
+        return
+    await message.answer(
+        f"🃏 Твои карты: {hand_text(player)} ({pv})\nКарта бота: {dealer[0]} ?\n\nЕщё или хватит?",
+        reply_markup=blackjack_kb(game)
+    )
+
+@dp.message(BuyState.waiting_amount)
+async def process_buy_amount(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        amount_germ = int(message.text)
+    except ValueError:
+        await message.answer("❌ Введи целое число Germ.")
+        return
+    if amount_germ < 1 or amount_germ > 10000:
+        await message.answer("❌ Можно купить от 1 до 10 000 Germ за раз.")
+        return
+    if amount_germ % 10 != 0:
+        await message.answer("❌ Количество Germ должно быть кратно 10 (1 звезда = 10 Germ).")
+        return
+    stars = amount_germ // 10
+    await state.clear()
+    prices = [LabeledPrice(label=f"{amount_germ} Germ", amount=stars)]
+    await bot.send_invoice(
+        chat_id=user_id,
+        title="Покупка Germ",
+        description=f"{amount_germ} Germ за {stars} звёзд",
+        payload=f"germ_{amount_germ}",
+        provider_token="",
+        currency="XTR",
+        prices=prices
+    )
+
+@dp.message(AdminState.waiting_give)
+async def admin_give(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("❌ Формат: ID сумма")
+        return
+    try:
+        target = int(parts[0])
+        amount = float(parts[1])
+    except ValueError:
+        await message.answer("❌ ID и сумма должны быть числами.")
+        return
+    users_data.setdefault(target, {"balance": 0.0})
+    users_data[target]["balance"] = round(users_data[target]["balance"] + amount, 2)
+    await db_update_balance(target, users_data[target]["balance"])
+    await state.clear()
+    await message.answer(
+        f"✅ Выдано {fmt(amount)} Germ пользователю {target}.\n💰 Его баланс: {fmt(users_data[target]['balance'])} Germ",
+        reply_markup=admin_menu
+    )
+    try:
+        await bot.send_message(target, f"🎁 Тебе начислено {fmt(amount)} Germ!")
+    except Exception:
+        pass
+
+@dp.message(AdminState.waiting_take)
+async def admin_take(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("❌ Формат: ID сумма")
+        return
+    try:
+        target = int(parts[0])
+        amount = float(parts[1])
+    except ValueError:
+        await message.answer("❌ ID и сумма должны быть числами.")
+        return
+    users_data.setdefault(target, {"balance": 0.0})
+    if users_data[target]["balance"] < amount:
+        await message.answer("❌ У пользователя недостаточно Germ.")
+        return
+    users_data[target]["balance"] = round(users_data[target]["balance"] - amount, 2)
+    await db_update_balance(target, users_data[target]["balance"])
+    await state.clear()
+    await message.answer(
+        f"✅ Списано {fmt(amount)} Germ у пользователя {target}.\n💰 Его баланс: {fmt(users_data[target]['balance'])} Germ",
+        reply_markup=admin_menu
+    )
+
+@dp.message(AdminState.waiting_broadcast)
+async def admin_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    text = message.text
+    await state.clear()
+    sent = 0
+    for uid in list(users_data.keys()):
+        try:
+            await bot.send_message(uid, text)
+            sent += 1
+        except Exception:
+            pass
+    await message.answer(f"📢 Рассылка отправлена: {sent} получателей.", reply_markup=admin_menu)
+
+@dp.message(AdminState.waiting_promo)
+async def admin_promo_create(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    parts = message.text.split()
+    if len(parts) != 3:
+        await message.answer("❌ Формат: КОД СУММА ЛИМИТ")
+        return
+    code = parts[0].upper()
+    try:
+        germ = float(parts[1])
+        limit = int(parts[2])
+    except ValueError:
+        await message.answer("❌ Сумма и лимит должны быть числами.")
+        return
+    if code in promocodes:
+        await message.answer("❌ Такой промокод уже есть.")
+        return
+    promocodes[code] = {"germ": germ, "limit": limit, "used": set()}
+    await db_save_promocodes()
+    await state.clear()
+    await message.answer(f"✅ Промокод {code} создан.\n💰 {fmt(germ)} Germ\n👥 Лимит: {limit}", reply_markup=promo_menu)
+
+@dp.message(AdminState.waiting_promo_delete)
+async def admin_promo_delete(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    code = message.text.strip().upper()
+    if code not in promocodes:
+        await message.answer("❌ Промокод не найден.", reply_markup=promo_menu)
+        return
+    promocodes.pop(code, None)
+    await db_save_promocodes()
+    await state.clear()
+    await message.answer(f"✅ Промокод {code} удалён.", reply_markup=promo_menu)
+
+@dp.message(AdminState.waiting_promo_activate)
+async def promo_activate(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    code = message.text.strip().upper()
+    p = promocodes.get(code)
+    if not p:
+        await message.answer("❌ Промокод не найден.")
+        return
+    if user_id in p["used"]:
+        await message.answer("❌ Ты уже активировал этот промокод.")
+        return
+    if len(p["used"]) >= p["limit"]:
+        await message.answer("❌ Лимит активаций исчерпан.")
+        return
+    p["used"].add(user_id)
+    users_data.setdefault(user_id, {"balance": 0.0})
+    users_data[user_id]["balance"] = round(users_data[user_id]["balance"] + p["germ"], 2)
+    await db_update_balance(user_id, users_data[user_id]["balance"])
+    await db_save_promocodes()
+    await state.clear()
+    await message.answer(
+        f"✅ Промокод активирован!\n🎁 +{fmt(p['germ'])} Germ\n💰 Баланс: {fmt(users_data[user_id]['balance'])} Germ",
+        reply_markup=get_main_menu(user_id)
+    )
+
+async def main():
+    global users_data, promocodes
+    await db_init()
+    users_data = await db_load_all_users()
+    promocodes = await db_load_promocodes()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
