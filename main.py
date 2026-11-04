@@ -9,7 +9,7 @@ import random
 import aiosqlite
 import os
 
-TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН"
+TOKEN = "9184774782:AAEGB-NlqoZpsFTJwDFaXxvEdrmZN5p4vIk"
 ADMIN_ID = 8121754585
 DB_PATH = "/app/data/bot.db"
 
