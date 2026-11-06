@@ -5,11 +5,15 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from yukiapi import YukiAPI
+from YouTubeMusic.Search import Search
+from YouTubeMusic.Stream import get_stream
 
 TOKEN = "9184774782:AAEGB-NlqoZpsFTJwDFaXxvEdrmZN5p4vIk"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# ПУТЬ К ФАЙЛУ С КУКАМИ (создай его и загрузи на GitHub)
+COOKIES_PATH = "cookies.txt"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -31,9 +35,9 @@ def build_results_kb(results, page, total_pages):
     page_items = results[start:end]
 
     for i, track in enumerate(page_items):
-        title = track.title[:40]
-        duration = track.duration
-        buttons.append([InlineKeyboardButton(text=f"{title} [{duration}]", callback_data=f"play:{start + i}")])
+        title = track.get('title', 'Без названия')[:40]
+        # У YouTubeMusic может не быть длительности в результатах поиска
+        buttons.append([InlineKeyboardButton(text=title, callback_data=f"play:{start + i}")])
 
     nav = []
     if page > 0:
@@ -74,27 +78,27 @@ async def search_music(message: types.Message, state: FSMContext):
         return
 
     status = await message.answer(f"🔍 Ищу: {query}...")
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     await state.clear()
 
     try:
-        async with YukiAPI() as yuki:
-            results = await yuki.search(query, limit=10)
+        results = await Search(query, limit=20)
+        # Библиотека возвращает словарь с ключом main_results
+        entries = results.get("main_results", []) if results else []
     except Exception as e:
         await status.edit_text(f"❌ Ошибка поиска: {str(e)}")
         return
 
-    if not results:
+    if not entries:
         await status.edit_text("❌ Ничего не найдено. Попробуй другой запрос.")
         return
 
     user_id = message.from_user.id
-    search_cache[user_id] = results
+    search_cache[user_id] = entries
 
-    total_pages = 1  # yukiapi отдаёт до 10 за раз, но можно и больше
+    total_pages = (len(entries) + 9) // 10
     await status.edit_text(
         f"🎶 Результаты по запросу «{query}»:",
-        reply_markup=build_results_kb(results, 0, total_pages)
+        reply_markup=build_results_kb(entries, 0, total_pages)
     )
 
 @dp.callback_query(lambda c: c.data.startswith("page:"))
@@ -106,7 +110,7 @@ async def paginate(callback: types.CallbackQuery):
     
     page = int(callback.data.split(":")[1])
     entries = search_cache[user_id]
-    total_pages = 1
+    total_pages = (len(entries) + 9) // 10
     
     try:
         await callback.message.edit_reply_markup(
@@ -130,24 +134,34 @@ async def download_track(callback: types.CallbackQuery):
         return
     
     track = entries[idx]
+    # В YouTubeMusic ссылка на трек обычно лежит в поле url или webpage_url
+    track_url = track.get('url') or track.get('webpage_url')
+    title = track.get('title', 'audio')
     
-    await callback.message.edit_text(f"⏳ Скачиваю: {track.title}...")
-    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_audio")
+    await callback.message.edit_text(f"⏳ Скачиваю: {title}...")
     await callback.answer()
 
     try:
-        async with YukiAPI() as yuki:
-            # yukiapi скачивает по названию или ссылке
-            file_path = await yuki.download(track.link, type="audio", output_dir=DOWNLOAD_DIR)
+        # Получаем прямую ссылку на аудиопоток
+        stream_url = await get_stream(track_url, COOKIES_PATH)
         
+        # Скачиваем файл по ссылке
+        import aiohttp
+        filename = os.path.join(DOWNLOAD_DIR, f"{idx}.mp3")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(stream_url) as resp:
+                with open(filename, 'wb') as f:
+                    async for chunk in resp.content.iter_chunked(1024):
+                        f.write(chunk)
+
         await callback.message.answer_audio(
-            audio=types.FSInputFile(file_path),
-            title=track.title,
-            performer="Music"
+            audio=types.FSInputFile(filename),
+            title=title,
+            performer="YouTube Music"
         )
         await callback.message.delete()
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(filename):
+            os.remove(filename)
             
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка скачивания: {str(e)}")
