@@ -23,7 +23,11 @@ ydl_search_opts = {
     'quiet': True,
     'no_warnings': True,
     'extract_flat': True,
-    'force_generic_extractor': False,
+    'skip_download': True,
+    'ignoreerrors': True,
+    'playlistend': 10,
+    'socket_timeout': 10,
+    'cachedir': False,
 }
 
 def get_main_menu():
@@ -81,13 +85,17 @@ async def search_music(message: types.Message, state: FSMContext):
     if not query:
         return
 
-    status = await message.answer(f"🔍 Ищу на SoundCloud: {query}...")
+    # Отправляем сообщение с крутящимися часиками (action="typing" или просто эмодзи)
+    status = await message.answer(f"🔍 Ищу на SoundCloud: {query}...\n⌛ Пожалуйста, подожди.")
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     await state.clear()
 
     search_url = f"scsearch10:{query}"
     try:
         with yt_dlp.YoutubeDL(ydl_search_opts) as ydl:
-            info = ydl.extract_info(search_url, download=False)
+            # Запускаем поиск в отдельном потоке, чтобы не блокировать бота
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_url, download=False))
             entries = info.get('entries', [])
     except Exception as e:
         await status.edit_text(f"❌ Ошибка поиска: {str(e)}")
@@ -142,7 +150,8 @@ async def download_track(callback: types.CallbackQuery):
     url = track.get('url') or track.get('webpage_url')
     title = track.get('title', 'audio')
     
-    await callback.message.edit_text(f"⏳ Скачиваю: {title}...")
+    await callback.message.edit_text(f"⏳ Скачиваю: {title}...\n⌛ Подожди немного.")
+    await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_audio")
     await callback.answer()
 
     ydl_opts = {
@@ -155,11 +164,13 @@ async def download_track(callback: types.CallbackQuery):
         }],
         'quiet': True,
         'no_warnings': True,
+        'cachedir': False,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
             filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3').replace('.opus', '.mp3')
             if not os.path.exists(filename):
                 base = os.path.splitext(filename)[0]
