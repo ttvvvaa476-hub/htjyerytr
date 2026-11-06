@@ -1,11 +1,11 @@
 import asyncio
 import os
-import yt_dlp
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from yukiapi import YukiAPI
 
 TOKEN = "9184774782:AAEGB-NlqoZpsFTJwDFaXxvEdrmZN5p4vIk"
 DOWNLOAD_DIR = "downloads"
@@ -19,17 +19,6 @@ search_cache = {}
 class MusicState(StatesGroup):
     waiting_query = State()
 
-ydl_search_opts = {
-    'quiet': True,
-    'no_warnings': True,
-    'extract_flat': True,
-    'skip_download': True,
-    'ignoreerrors': True,
-    'playlistend': 10,
-    'socket_timeout': 10,
-    'cachedir': False,
-}
-
 def get_main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Искать музыку", callback_data="search_music")]
@@ -41,18 +30,17 @@ def build_results_kb(results, page, total_pages):
     end = start + 10
     page_items = results[start:end]
 
-    for i, item in enumerate(page_items):
-        title = item.get('title', 'Без названия')[:40]
-        duration = item.get('duration', 0)
-        dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?:??"
-        buttons.append([InlineKeyboardButton(text=f"{title} [{dur_str}]", callback_data=f"sc_play:{start + i}")])
+    for i, track in enumerate(page_items):
+        title = track.title[:40]
+        duration = track.duration
+        buttons.append([InlineKeyboardButton(text=f"{title} [{duration}]", callback_data=f"play:{start + i}")])
 
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"sc_page:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"page:{page - 1}"))
     nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"sc_page:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"page:{page + 1}"))
     
     if nav:
         buttons.append(nav)
@@ -62,7 +50,7 @@ def build_results_kb(results, page, total_pages):
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     await message.answer(
-        "🎵 Привет! Я бот для поиска музыки на SoundCloud.\n"
+        "🎵 Привет! Я бот для поиска музыки.\n"
         "Нажми кнопку ниже, чтобы начать.",
         reply_markup=get_main_menu()
     )
@@ -85,36 +73,31 @@ async def search_music(message: types.Message, state: FSMContext):
     if not query:
         return
 
-    # Отправляем сообщение с крутящимися часиками (action="typing" или просто эмодзи)
-    status = await message.answer(f"🔍 Ищу на SoundCloud: {query}...\n⌛ Пожалуйста, подожди.")
+    status = await message.answer(f"🔍 Ищу: {query}...")
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     await state.clear()
 
-    search_url = f"scsearch10:{query}"
     try:
-        with yt_dlp.YoutubeDL(ydl_search_opts) as ydl:
-            # Запускаем поиск в отдельном потоке, чтобы не блокировать бота
-            loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(search_url, download=False))
-            entries = info.get('entries', [])
+        async with YukiAPI() as yuki:
+            results = await yuki.search(query, limit=10)
     except Exception as e:
         await status.edit_text(f"❌ Ошибка поиска: {str(e)}")
         return
 
-    if not entries:
+    if not results:
         await status.edit_text("❌ Ничего не найдено. Попробуй другой запрос.")
         return
 
     user_id = message.from_user.id
-    search_cache[user_id] = entries
+    search_cache[user_id] = results
 
-    total_pages = (len(entries) + 9) // 10
+    total_pages = 1  # yukiapi отдаёт до 10 за раз, но можно и больше
     await status.edit_text(
         f"🎶 Результаты по запросу «{query}»:",
-        reply_markup=build_results_kb(entries, 0, total_pages)
+        reply_markup=build_results_kb(results, 0, total_pages)
     )
 
-@dp.callback_query(lambda c: c.data.startswith("sc_page:"))
+@dp.callback_query(lambda c: c.data.startswith("page:"))
 async def paginate(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if user_id not in search_cache:
@@ -123,7 +106,7 @@ async def paginate(callback: types.CallbackQuery):
     
     page = int(callback.data.split(":")[1])
     entries = search_cache[user_id]
-    total_pages = (len(entries) + 9) // 10
+    total_pages = 1
     
     try:
         await callback.message.edit_reply_markup(
@@ -133,7 +116,7 @@ async def paginate(callback: types.CallbackQuery):
         pass
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data.startswith("sc_play:"))
+@dp.callback_query(lambda c: c.data.startswith("play:"))
 async def download_track(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if user_id not in search_cache:
@@ -147,46 +130,24 @@ async def download_track(callback: types.CallbackQuery):
         return
     
     track = entries[idx]
-    url = track.get('url') or track.get('webpage_url')
-    title = track.get('title', 'audio')
     
-    await callback.message.edit_text(f"⏳ Скачиваю: {title}...\n⌛ Подожди немного.")
+    await callback.message.edit_text(f"⏳ Скачиваю: {track.title}...")
     await bot.send_chat_action(chat_id=callback.message.chat.id, action="upload_audio")
     await callback.answer()
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(DOWNLOAD_DIR, '%(id)s.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        'cachedir': False,
-    }
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
-            filename = ydl.prepare_filename(info).replace('.webm', '.mp3').replace('.m4a', '.mp3').replace('.opus', '.mp3')
-            if not os.path.exists(filename):
-                base = os.path.splitext(filename)[0]
-                for ext in ['.mp3', '.m4a', '.webm']:
-                    if os.path.exists(base + ext):
-                        filename = base + ext
-                        break
-
+        async with YukiAPI() as yuki:
+            # yukiapi скачивает по названию или ссылке
+            file_path = await yuki.download(track.link, type="audio", output_dir=DOWNLOAD_DIR)
+        
         await callback.message.answer_audio(
-            audio=types.FSInputFile(filename),
-            title=info.get('title', title),
-            performer=info.get('uploader', 'SoundCloud')
+            audio=types.FSInputFile(file_path),
+            title=track.title,
+            performer="Music"
         )
         await callback.message.delete()
-        if os.path.exists(filename):
-            os.remove(filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
             
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка скачивания: {str(e)}")
