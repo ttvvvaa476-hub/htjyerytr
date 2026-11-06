@@ -12,7 +12,6 @@ TOKEN = "9184774782:AAEGB-NlqoZpsFTJwDFaXxvEdrmZN5p4vIk"
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# ПУТЬ К ФАЙЛУ С КУКАМИ (создай его и загрузи на GitHub)
 COOKIES_PATH = "cookies.txt"
 
 bot = Bot(token=TOKEN)
